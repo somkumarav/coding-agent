@@ -1,8 +1,12 @@
 {
   "name": "coding-agent",
-  "module": ".src/index.ts",
+  "module": "./src/index.ts",
   "type": "module",
   "private": true,
+  "bin": {
+    "mycc": "./bin/mycc.js"
+  },
+
   "scripts": {
     "typecheck": "bun check"
   },
