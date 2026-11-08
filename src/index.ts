@@ -2,7 +2,8 @@ import { fileURLToPath } from "bun";
 import { config } from "dotenv";
 import { parseArgs } from "node:util";
 import { getProvider } from "./providers";
-import type { Message } from "./types";
+import type { AssistantMessage, Message } from "./types";
+import { readTool } from "./tools/read-file";
 
 config({
   path: fileURLToPath(new URL("../.env", import.meta.url)),
@@ -21,17 +22,46 @@ if (!values.prompt || values.prompt === "") {
   process.exit(1);
 }
 
+const tools = [readTool];
+
 const provider = getProvider("anthropic");
 const model = values.model ?? provider.defaultModel;
 const messages: Message[] = [{ role: "user", content: values.prompt }];
 
-for await (const event of provider.stream({ messages, model, system: "" })) {
-  if (event.type === "text_delta") {
-    process.stdout.write(event.delta);
-  } else {
-    const { usage, stopReason } = event.messages;
-    console.log(
-      `\n\n${provider.name}...${model}...${usage.input}...${usage.output}...${stopReason}`,
-    );
+async function callModel(): Promise<AssistantMessage> {
+  for await (const event of provider.stream({
+    messages,
+    model,
+    system: "",
+    tools,
+  })) {
+    if (event.type === "text_delta") {
+      process.stdout.write(event.delta);
+    } else {
+      const { usage, stopReason } = event.messages;
+      console.log(
+        `\n\n${provider.name}...${model}...${usage.input}...${usage.output}...${stopReason}`,
+      );
+      return event.messages;
+    }
   }
+  throw new Error("Stream ended without done event");
+}
+
+const first = await callModel();
+messages.push(first);
+
+if (first.stopReason === "toolUse") {
+  for (const block of first.content) {
+    if (block.type !== "toolCall") continue;
+    const result = await readTool.execute(block.arguments);
+    messages.push({
+      role: "toolResult",
+      toolCallId: block.id,
+      toolName: block.name,
+      content: result,
+      isError: false,
+    });
+  }
+  messages.push(await callModel());
 }
